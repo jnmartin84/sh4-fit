@@ -1,0 +1,22 @@
+--- a/Makefile
++++ b/Makefile
+@@ -70,7 +70,7 @@
+ 	mkdir -p $(BUILD_DIR)
+ 
+ $(TARGET): wadtool $(O_FILES) | buildtarget
+-	kos-cc -o ${BUILD_DIR}/$@ $(O_FILES) array_fast_copy.o
++	kos-cc -o ${BUILD_DIR}/$@ $(O_FILES) array_fast_copy.o $(LDFLAGS)
+ 
+ clean:
+ 	$(RM) doom64.cdi doom64.iso header.iso bootfile.bin $(O_FILES) $(BUILD_DIR)/$(TARGET)
+@@ -118,3 +118,10 @@
+ print-% : ; $(info $* is a $(flavor $*) variable set to [$($*)]) @true
+ 
+ include ${KOS_BASE}/Makefile.rules
++
++# Sh4Fit: a map, and the LTO partitions it names kept on disk
++LDFLAGS += -Wl,-Map=$(BUILD_DIR)/doom64.map -save-temps
++ifdef SH4FIT_LAYOUT
++export KOS_LDFLAGS := $(subst $(KOS_BASE)/utils/ldscripts/shlelf.xc,$(SH4FIT_LAYOUT),$(KOS_LDFLAGS))
++$(TARGET): $(SH4FIT_LAYOUT)
++endif

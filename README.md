@@ -7,7 +7,7 @@ SH-4's caches:
 - the 8 KiB direct-mapped **instruction cache** (256 lines of 32 bytes), and
 - the 16 KiB direct-mapped **operand cache** (512 lines; 8 KiB with OCRAM).
 
-It is the SH-4 counterpart of [MipsFit](MipsFit/README.md), the N64 tool by
+It is the SH-4 counterpart of [MipsFit](https://github.com/Byterset/MipsFit), the N64 tool by
 Kevin R., and follows its method: execution traces, Gloy & Smith temporal
 relationship graphs, call-chain clustering, slot-aware placement and
 late-acceptance hill climbing, ranked by replaying the traces through a cache
@@ -298,6 +298,13 @@ python3 -m sh4fit simulate sh4fit-out --elf build-opt/doom64.elf --map build-opt
 `doom64.cdi` is doom64-dc's `make cdi` image; the capture boots the ELF and
 reads the game's data from the disc. `--build-dir .` is needed because the
 map's paths are relative to where the linker ran, not to `build/`.
+
+[`examples/doom64`](examples/doom64/README.md) has this Makefile change as a
+patch. It also has a second patch that adds the FPS overlay and a hook printing
+CPU time per frame and the hardware cache counters, for comparing a relinked
+build with the original on a console. With it is a layout from the title map
+and DEMO1 together, which cuts estimated stall cycles in DEMO1 from 460 to 202
+per 1k instructions.
 
 ## Limitations
 

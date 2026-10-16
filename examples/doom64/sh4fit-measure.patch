@@ -1,0 +1,149 @@
+--- a/Makefile
++++ b/Makefile
+@@ -36,6 +36,7 @@
+ CFLAGS = -std=gnu17 -Wno-deprecated-declarations -Wall -Wno-implicit-fallthrough -Wformat=2
+ # everyone asks "HoW dO i GeT fPs On ScReEn???"
+ #CFLAGS += -DDCLOCALDEV -DOSDSHOWFPS
++CFLAGS += -DOSDSHOWFPS -DSH4FIT_PERF
+ 
+ # if you want to help clean up the code on new compiler versions, here you go 
+ #CFLAGS += -Wextra -Werror
+--- a/src/d_main.c
++++ b/src/d_main.c
+@@ -21,6 +21,61 @@
+ 
+ #define NS_PER_VBL 16666667
+ 
++#ifdef SH4FIT_PERF
++// Sh4Fit A/B measurement. Every 300 game tics (10 s) and at the end of each
++// MiniLoop, print the CPU time spent in ticker and drawer per frame plus the
++// SH-4 performance counters (dcload console or serial). The counter mode
++// advances once per attract-mode pass: IC misses, OC misses, stall cycles.
++#include <arch/timer.h>
++#include "sh4fit_perf.h"
++
++#define SH4FIT_WINDOW_TICS 300
++
++static int sh4fit_pass = -1;
++static int sh4fit_session;
++static char sh4fit_where[32];
++static int sh4fit_window_tic;
++static uint64_t sh4fit_ticker_ns;
++static uint64_t sh4fit_drawer_ns;
++
++static void sh4fit_window_report(void)
++{
++	char label[160];
++	uint32_t frames = sh4fit_perf_frames ? sh4fit_perf_frames : 1;
++
++	snprintf(label, sizeof(label), "pass %d session %d %s tics %d-%d cpu %lu us/frame (ticker %lu drawer %lu)",
++		 sh4fit_pass, sh4fit_session, sh4fit_where, sh4fit_window_tic, gametic,
++		 (unsigned long)((sh4fit_ticker_ns + sh4fit_drawer_ns) / frames / 1000),
++		 (unsigned long)(sh4fit_ticker_ns / frames / 1000),
++		 (unsigned long)(sh4fit_drawer_ns / frames / 1000));
++	sh4fit_perf_report(label);
++	sh4fit_ticker_ns = 0;
++	sh4fit_drawer_ns = 0;
++	sh4fit_window_tic = gametic;
++}
++
++static void sh4fit_session_begin(void (*drawer)(void))
++{
++	sh4fit_session++;
++	if (drawer == P_Drawer)
++		snprintf(sh4fit_where, sizeof(sh4fit_where), "map %d%s", gamemap, demoplayback ? " demo" : "");
++	else
++		snprintf(sh4fit_where, sizeof(sh4fit_where), "screen");
++	printf("sh4fit pass %d session %d %s start\n", sh4fit_pass, sh4fit_session, sh4fit_where);
++	sh4fit_perf_start(sh4fit_pass < 0 ? SH4FIT_PERF_IC : (sh4fit_perf_mode_t)(sh4fit_pass % 3));
++	sh4fit_ticker_ns = 0;
++	sh4fit_drawer_ns = 0;
++	sh4fit_window_tic = gametic;
++}
++
++static void sh4fit_session_end(void)
++{
++	if (sh4fit_perf_frames)
++		sh4fit_window_report();
++	sh4fit_perf_stop();
++}
++#endif
++
+ //
+ // GLOBALS
+ //
+@@ -168,6 +223,9 @@
+ 	P_RefreshBrightness();
+ 
+ 	while (true) {
++#ifdef SH4FIT_PERF
++		sh4fit_pass++;
++#endif
+ 		exit = D_TitleMap();
+ 
+ 		if (exit != ga_exit) {
+@@ -278,6 +336,10 @@
+ 	drawsync2 = vsync;
+ 
+ 	uint32_t last_delta;
++#ifdef SH4FIT_PERF
++	uint64_t sh4fit_t0;
++	sh4fit_session_begin(drawer);
++#endif
+ 
+ 	while (true) {
+ #if RANGECHECK
+@@ -375,7 +437,13 @@
+ 			if (demoplayback || (!gamepaused && last_delta == 0))
+ 				menu_settings.Interpolate = 0;
+ 
++#ifdef SH4FIT_PERF
++			sh4fit_t0 = timer_ns_gettime64();
++#endif
+ 			exit = ticker();
++#ifdef SH4FIT_PERF
++			sh4fit_ticker_ns += timer_ns_gettime64() - sh4fit_t0;
++#endif
+ #if RANGECHECK
+ 			Z_CheckZone(mainzone);
+ #endif
+@@ -396,7 +464,13 @@
+ 			if (demoplayback || (!gamepaused && last_delta == 0))
+ 				menu_settings.Interpolate = 0;
+ 
++#ifdef SH4FIT_PERF
++			sh4fit_t0 = timer_ns_gettime64();
++#endif
+ 			drawer();
++#ifdef SH4FIT_PERF
++			sh4fit_drawer_ns += timer_ns_gettime64() - sh4fit_t0;
++#endif
+ #if RANGECHECK
+ 			Z_CheckZone(mainzone);
+ #endif
+@@ -420,15 +494,25 @@
+ 
+ 			// see `I_SystemTicker` in `i_main.c`
+ 			rdpmsg = 1;
++#ifdef SH4FIT_PERF
++			sh4fit_perf_frame();
++#endif
+ 		}
+ 
+ 		gamevbls = gametic;
+ 		f_gamevbls = f_gametic;
+ 
+ 		framecount += 1;
++#ifdef SH4FIT_PERF
++		if (gametic - sh4fit_window_tic >= SH4FIT_WINDOW_TICS)
++			sh4fit_window_report();
++#endif
+ 
+ 		dend = perf_cntr_timer_ns();
+ 	}
++#ifdef SH4FIT_PERF
++	sh4fit_session_end();
++#endif
+ 
+ 	if (stop) {
+ 		stop(exit);
