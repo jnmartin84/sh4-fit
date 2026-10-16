@@ -1,0 +1,108 @@
+diff --git a/libswirl/hw/gdrom/gdromv3.cpp b/libswirl/hw/gdrom/gdromv3.cpp
+index a102048..5d7772f 100644
+--- a/libswirl/hw/gdrom/gdromv3.cpp
++++ b/libswirl/hw/gdrom/gdromv3.cpp
+@@ -1142,7 +1142,7 @@ struct GDRomV3_impl final : MMIODevice {
+ 
+         len = std::min(len, (u32)10240);
+         // do we need to do this for GDROM DMA?
+-        if (0x8201 != (dmaor & DMAOR_MASK))
++        if (DMAOR_VALID != (dmaor & DMAOR_MASK))
+         {
+             printf("\n!\tGDROM: DMAOR has invalid settings (%X) !\n", dmaor);
+             //return;
+diff --git a/libswirl/hw/naomi/naomi.cpp b/libswirl/hw/naomi/naomi.cpp
+index 5223c81..48dde91 100644
+--- a/libswirl/hw/naomi/naomi.cpp
++++ b/libswirl/hw/naomi/naomi.cpp
+@@ -586,7 +586,7 @@ struct NaomiDevice_impl : MMIODevice {
+ 
+ 		//len=min(len,(u32)32);
+ 		// do we need to do this for gdrom dma ?
+-		if (0x8201 != (dmaor & DMAOR_MASK)) {
++		if (DMAOR_VALID != (dmaor & DMAOR_MASK)) {
+ 			printf("\n!\tGDROM: DMAOR has invalid settings (%X) !\n", dmaor);
+ 			//return;
+ 		}
+diff --git a/libswirl/hw/pvr/pvr_sb_regs.cpp b/libswirl/hw/pvr/pvr_sb_regs.cpp
+index 0cd4907..01a1aed 100644
+--- a/libswirl/hw/pvr/pvr_sb_regs.cpp
++++ b/libswirl/hw/pvr/pvr_sb_regs.cpp
+@@ -43,7 +43,7 @@ struct PVRDevice : MMIODevice {
+         u32 dst = SB_C2DSTAT;
+         u32 len = SB_C2DLEN;
+ 
+-        if (0x8201 != (dmaor & DMAOR_MASK))
++        if (DMAOR_VALID != (dmaor & DMAOR_MASK))
+         {
+             printf("\n!\tDMAC: DMAOR has invalid settings (%X) !\n", dmaor);
+             return;
+@@ -174,7 +174,7 @@ struct PVRDevice : MMIODevice {
+         u32 dst = SB_PDSTAP;	// VRAM address
+         u32 len = SB_PDLEN;
+ 
+-        if (0x8201 != (dmaor & DMAOR_MASK))
++        if (DMAOR_VALID != (dmaor & DMAOR_MASK))
+         {
+             printf("\n!\tDMAC: DMAOR has invalid settings (%X) !\n", dmaor);
+             return;
+diff --git a/libswirl/hw/sh4/modules/dmac.h b/libswirl/hw/sh4/modules/dmac.h
+index 9e5441b..2be227b 100644
+--- a/libswirl/hw/sh4/modules/dmac.h
++++ b/libswirl/hw/sh4/modules/dmac.h
+@@ -14,4 +14,7 @@ void UpdateDMA();
+ 
+ 
+ 
+-#define DMAOR_MASK	0xFFFF8201
+\ No newline at end of file
++// DDT, NMIF, AE and DME: the channel priority bits (PR) don't matter here, and
++// KallistiOS 2.1+ sets DMAOR to 0x8001 rather than 0x8201
++#define DMAOR_MASK	0xFFFF8007
++#define DMAOR_VALID	0x8001
+\ No newline at end of file
+diff --git a/libswirl/reios/gdrom_hle.cpp b/libswirl/reios/gdrom_hle.cpp
+index f6e48ea..f3607a8 100644
+--- a/libswirl/reios/gdrom_hle.cpp
++++ b/libswirl/reios/gdrom_hle.cpp
+@@ -181,7 +181,7 @@ void GD_HLE_Command(u32 cc, u32 prm)
+ void gdrom_hle_op()
+ {
+ 	static u32 last_cmd = 0xFFFFFFFF;	// only works for last cmd, might help somewhere
+-	static u32 dwReqID=0xF0FFFFFF;		// ReqID, starting w/ high val
++	static u32 dwReqID=0;			// ReqID: positive, as the BIOS's are (KallistiOS 2.2 treats <= 0 as failure)
+ 
+ 	if( SYSCALL_GDROM == r[6] )		// GDROM SYSCALL
+ 	{
+@@ -191,7 +191,8 @@ void gdrom_hle_op()
+ 		case GDROM_SEND_COMMAND:	// SEND GDROM COMMAND RET: - if failed + req id
+ 			debugf("\nGDROM:\tHLE SEND COMMAND CC:%X  param ptr: %X\n",r[4],r[5]);
+ 			GD_HLE_Command(r[4],r[5]);
+-			last_cmd = r[0] = --dwReqID;		// RET Request ID
++			dwReqID = dwReqID % 0x7FFFFFFF + 1;
++			last_cmd = r[0] = dwReqID;		// RET Request ID
+ 		break;
+ 
+ 		case GDROM_CHECK_COMMAND:	// 
+diff --git a/libswirl/reios/reios.cpp b/libswirl/reios/reios.cpp
+index 4f83a3a..060435e 100644
+--- a/libswirl/reios/reios.cpp
++++ b/libswirl/reios/reios.cpp
+@@ -203,7 +203,16 @@ void reios_sys_system() {
+ }
+ 
+ void reios_sys_font() {
+-	printf("reios_sys_font\n");
++	// r1 selects: 0 = font address, 1 = lock, 2 = unlock. Without a BIOS image
++	// the font area reads blank, but KallistiOS's bfont spins until the lock
++	// succeeds, so it has to.
++	switch (Sh4cntx.r[1]) {
++	case 0: Sh4cntx.r[0] = 0xA0100020; break;
++	case 1: case 2: Sh4cntx.r[0] = 0; break;
++	default:
++		printf("reios_sys_font: unknown function %u\n", Sh4cntx.r[1]);
++		Sh4cntx.r[0] = -1;
++	}
+ }
+ 
+ void reios_sys_flashrom() {

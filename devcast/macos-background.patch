@@ -1,0 +1,101 @@
+diff --git a/reicast/apple/emulator-osx/emulator-osx/AppDelegate.h b/reicast/apple/emulator-osx/emulator-osx/AppDelegate.h
+index 007ac16..14ae45b 100644
+--- a/reicast/apple/emulator-osx/emulator-osx/AppDelegate.h
++++ b/reicast/apple/emulator-osx/emulator-osx/AppDelegate.h
+@@ -19,6 +19,10 @@
+ 
+ + (AppDelegate *)sharedInstance;
+ 
++// DEVCAST_BACKGROUND=1: run without a Dock icon, focus or a visible window, for
++// scripted captures that should not disturb whatever else is on screen.
+++ (BOOL)backgroundMode;
++
+ - (instancetype)initWithArgc:(int)argc andArgv:(char**)argv;
+ 
+ - (void)showConsoleWindow:(NSMenuItem *)menuItem;
+diff --git a/reicast/apple/emulator-osx/emulator-osx/AppDelegate.mm b/reicast/apple/emulator-osx/emulator-osx/AppDelegate.mm
+index ebe9974..a8004d8 100644
+--- a/reicast/apple/emulator-osx/emulator-osx/AppDelegate.mm
++++ b/reicast/apple/emulator-osx/emulator-osx/AppDelegate.mm
+@@ -42,6 +42,9 @@ static bool _isInitializing = true;
+     // Terminal arguments
+     int _argc;
+     char** _argv;
++
++    // Keeps App Nap from throttling a background run
++    id<NSObject> _backgroundActivity;
+ }
+ 
+ #pragma mark - Delegate Methods -
+@@ -50,6 +53,11 @@ static bool _isInitializing = true;
+     return _sharedInstance;
+ }
+ 
+++ (BOOL)backgroundMode {
++    const char *value = getenv("DEVCAST_BACKGROUND");
++    return value && *value && strcmp(value, "0") != 0;
++}
++
+ - (instancetype)initWithArgc:(int)argc andArgv:(char **)argv {
+     self = [super init];
+     _argc = argc;
+@@ -249,8 +257,21 @@ static bool _isInitializing = true;
+     _mainWindow.delegate = self;
+     _mainWindow.contentView = _glView;
+     _mainWindow.acceptsMouseMovedEvents = YES;
+-    [_mainWindow makeKeyAndOrderFront:_mainWindow];
+-    [_mainWindow center];
++    if ([AppDelegate backgroundMode]) {
++        // Transparent, click-through and behind every other window. It stays
++        // on screen so the GL view keeps a real drawable and a screen to scale by.
++        _mainWindow.alphaValue = 0.0;
++        _mainWindow.ignoresMouseEvents = YES;
++        _mainWindow.excludedFromWindowsMenu = YES;
++        _mainWindow.collectionBehavior = NSWindowCollectionBehaviorTransient | NSWindowCollectionBehaviorIgnoresCycle;
++        [_mainWindow orderBack:nil];
++        _backgroundActivity = [[NSProcessInfo processInfo]
++            beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep | NSActivityLatencyCritical
++            reason:@"devcast background run"];
++    } else {
++        [_mainWindow makeKeyAndOrderFront:_mainWindow];
++        [_mainWindow center];
++    }
+     
+     // Set initial scale factor and view size
+     _backingScaleFactor = _mainWindow.screen.backingScaleFactor;
+@@ -273,8 +294,10 @@ static bool _isInitializing = true;
+ }
+ 
+ - (void)setupUIThread {
+-    [_mainWindow makeKeyAndOrderFront:_mainWindow];
+-    [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
++    if (![AppDelegate backgroundMode]) {
++        [_mainWindow makeKeyAndOrderFront:_mainWindow];
++        [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
++    }
+     // Run the rendering in a dedicated thread
+     _uiThread = [[NSThread alloc] initWithBlock:^{
+         NSLog(@"Starting UI Loop");
+diff --git a/reicast/apple/emulator-osx/emulator-osx/main.m b/reicast/apple/emulator-osx/emulator-osx/main.m
+index 4c9f087..c6bd38a 100644
+--- a/reicast/apple/emulator-osx/emulator-osx/main.m
++++ b/reicast/apple/emulator-osx/emulator-osx/main.m
+@@ -20,14 +20,16 @@ int main(int argc, char *argv[]) {
+     @autoreleasepool {
+         // Create Application and AppDelegate
+         NSApplication *app = [NSApplication sharedApplication];
+-        [app setActivationPolicy:NSApplicationActivationPolicyRegular];
++        BOOL background = [AppDelegate backgroundMode];
++        [app setActivationPolicy:background ? NSApplicationActivationPolicyAccessory : NSApplicationActivationPolicyRegular];
+         [app setDelegate:(id)[[AppDelegate alloc] initWithArgc:argc andArgv:argv]];
+         
+         // Create the Main Menu
+         [MainMenu create];
+              
+         // Start the Application
+-        [app activateIgnoringOtherApps:YES];
++        if (!background)
++            [app activateIgnoringOtherApps:YES];
+         [app run];
+         
+         // Return success when we exit

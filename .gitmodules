@@ -1,0 +1,3 @@
+[submodule "MipsFit"]
+	path = MipsFit
+	url = https://github.com/Byterset/MipsFit.git

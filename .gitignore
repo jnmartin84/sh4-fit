@@ -1,0 +1,26 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# local, not part of the project
+resume_session
+.DS_Store
+
+# captures and analysis output
+*.sh4trace
+*.sh4trace.log
+sh4fit-out/
+
+# demo and devcast test builds
+examples/demo/*.o
+examples/demo/*.elf
+examples/demo/*.map
+examples/demo/*.ltrans*
+examples/demo/*.lto_wrapper_args
+examples/demo/*.res
+examples/demo/*.wpa.args.*
+devcast/test/*.o
+devcast/test/*.elf
+devcast/test/*.map

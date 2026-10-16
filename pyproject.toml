@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sh4fit"
+version = "0.2.0"
+description = "Cache layout tools for Dreamcast homebrew (SH-4 instruction and operand caches)"
+requires-python = ">=3.10"
+keywords = ["dreamcast", "sh4", "cache", "linker"]
+
+[project.scripts]
+sh4fit = "sh4fit.cli:main"
+
+[tool.setuptools]
+packages = ["sh4fit"]

@@ -1,0 +1,928 @@
+diff --git a/libswirl/hw/pvr/spg.cpp b/libswirl/hw/pvr/spg.cpp
+index efe1579..4c8976b 100644
+--- a/libswirl/hw/pvr/spg.cpp
++++ b/libswirl/hw/pvr/spg.cpp
+@@ -12,6 +12,7 @@
+ #include "hw/holly/holly_intc.h"
+ #include "oslib/oslib.h"
+ #include "hw/sh4/sh4_sched.h"
++#include "hw/sh4/sh4_trace.h"
+ 
+ //SPG emulation; Scanline/Raster beam registers & interrupts
+ //Time to emulate that stuff correctly ;)
+@@ -173,6 +174,7 @@ struct SPG_impl final : SPG {
+                 //Vblank counter
+                 vblk_cnt++;
+                 vblank_count_monotonic++;
++                sh4trace::frame(vblank_count_monotonic);
+                 asic->RaiseInterrupt(holly_HBLank);// -> This turned out to be HBlank btw , needs to be emulated ;(
+                 //TODO : rend_if_VBlank();
+                 rend_vblank();//notify for vblank :)
+diff --git a/libswirl/hw/sh4/interpr/sh4_fpu.cpp b/libswirl/hw/sh4/interpr/sh4_fpu.cpp
+index 964423d..892eb85 100644
+--- a/libswirl/hw/sh4/interpr/sh4_fpu.cpp
++++ b/libswirl/hw/sh4/interpr/sh4_fpu.cpp
+@@ -14,6 +14,7 @@
+ #include "../sh4_rom.h"
+ 
+ #include "hw/sh4/sh4_mem.h"
++#include "sh4_trace_mem.h"
+ 
+ 
+ #define sh4op(str) void DYNACALL str (u32 op)
+diff --git a/libswirl/hw/sh4/interpr/sh4_interpreter.cpp b/libswirl/hw/sh4/interpr/sh4_interpreter.cpp
+index 410e396..e14fabe 100644
+--- a/libswirl/hw/sh4/interpr/sh4_interpreter.cpp
++++ b/libswirl/hw/sh4/interpr/sh4_interpreter.cpp
+@@ -15,6 +15,7 @@
+ #include "../sh4_opcode_list.h"
+ #include "../sh4_core.h"
+ #include "hw/sh4/sh4_mem.h"
++#include "hw/sh4/sh4_trace.h"
+ 
+ 
+ #define CPU_RATIO      (8)
+@@ -38,6 +39,7 @@ void ExecuteDelayslot()
+ #endif
+         u32 addr = next_pc;
+         next_pc += 2;
++        sh4trace_fetch(addr);
+         u32 op = IReadMem16(addr);
+ 
+         if (op != 0)	// Looney Tunes: Space Race hack
+@@ -87,6 +89,7 @@ struct SH4IInterpreter : SuperH4Backend {
+                 {
+                     u32 addr = next_pc;
+                     next_pc += 2;
++                    sh4trace_fetch(addr);
+                     u32 op = IReadMem16(addr);
+ 
+                     ExecuteOpcode(op);
+diff --git a/libswirl/hw/sh4/interpr/sh4_opcodes.cpp b/libswirl/hw/sh4/interpr/sh4_opcodes.cpp
+index e56f504..0c0c589 100644
+--- a/libswirl/hw/sh4/interpr/sh4_opcodes.cpp
++++ b/libswirl/hw/sh4/interpr/sh4_opcodes.cpp
+@@ -17,6 +17,7 @@
+ #include "hw/pvr/pvr_mem.h"
+ #include "../sh4_interpreter.h"
+ #include "hw/sh4/sh4_mem.h"
++#include "sh4_trace_mem.h"
+ #include "hw/sh4/sh4_mmr.h"
+ #include "../sh4_core.h"
+ #include "../modules/ccn.h"
+@@ -857,6 +858,7 @@ sh4op(i0000_nnnn_1100_0011)
+ 	u32 n = GetN(op);
+ 	u32 addr = r[n];
+ 	u32 data = r[0];
++	sh4trace_cacheop(addr, sh4trace::OP_MOVCA);
+ 	if (addr & (1<<25)) {
+ 		verify((addr & 3) == 0);
+ 		u32 index = (addr / 32) & 255;
+@@ -867,7 +869,7 @@ sh4op(i0000_nnnn_1100_0011)
+ 		*(u32*)&OIX_CACHE[index][offset] = data;
+ 		OIX_DIRTY[index] = true;
+ 	} else {
+-		WriteMemU32(r[n],r[0]);//at r[n],r[0]
++		sh4t_WriteMem32_untraced(r[n],r[0]);//at r[n],r[0]
+ 	}
+ 	//iWarn(op, "movca.l R0, @<REG_N>");
+ }
+@@ -1216,6 +1218,7 @@ sh4op(i0000_0000_0011_1000)
+ //ocbi @<REG_N>
+ sh4op(i0000_nnnn_1001_0011)
+ {
++	sh4trace_cacheop(r[GetN(op)], sh4trace::OP_OCBI);
+ 	//u32 n = GetN(op);
+ 	//printf("ocbi @0x%08X \n",r[n]);
+ }
+@@ -1223,6 +1226,7 @@ sh4op(i0000_nnnn_1001_0011)
+ //ocbp @<REG_N>
+ sh4op(i0000_nnnn_1010_0011)
+ {
++	sh4trace_cacheop(r[GetN(op)], sh4trace::OP_OCBP);
+ 	//u32 n = GetN(op);
+ 	//printf("ocbp @0x%08X \n",r[n]);
+ }
+@@ -1232,6 +1236,7 @@ sh4op(i0000_nnnn_1011_0011)
+ {
+ 	u32 n = GetN(op);
+ 	u32 addr = r[n];
++	sh4trace_cacheop(addr, sh4trace::OP_OCBWB);
+ 	if (addr & (1<<25)) {
+ 		u32 index = (addr / 32) & 255;
+ 		verify(OIX_ADDR[index] == (addr & ~31));
+@@ -1320,6 +1325,8 @@ sh4op(i0000_nnnn_1000_0011)
+ 		else
+ 			do_sqw<false>(Dest);
+ 	}
++	else
++		sh4trace_cacheop(Dest, sh4trace::OP_PREF);
+ }
+ 
+ 
+diff --git a/libswirl/hw/sh4/interpr/sh4_trace_mem.h b/libswirl/hw/sh4/interpr/sh4_trace_mem.h
+new file mode 100644
+index 0000000..24a3d3f
+--- /dev/null
++++ b/libswirl/hw/sh4/interpr/sh4_trace_mem.h
+@@ -0,0 +1,43 @@
++/*
++	This file is part of libswirl
++*/
++#include "license/bsd"
++
++/*
++	Routes the interpreter's data accesses through the SH4XTRC1 hooks. Include
++	it after hw/sh4/sh4_mem.h in the opcode handlers (sh4_opcodes.cpp and
++	sh4_fpu.cpp) only; instruction fetches are hooked in sh4_interpreter.cpp.
++*/
++#pragma once
++#include "hw/sh4/sh4_mem.h"
++#include "hw/sh4/sh4_trace.h"
++
++static INLINE u8 sh4t_ReadMem8(u32 addr) { sh4trace_load(addr); return ReadMem8(addr); }
++static INLINE u16 sh4t_ReadMem16(u32 addr) { sh4trace_load(addr); return ReadMem16(addr); }
++static INLINE u32 sh4t_ReadMem32(u32 addr) { sh4trace_load(addr); return ReadMem32(addr); }
++static INLINE u64 sh4t_ReadMem64(u32 addr) { sh4trace_load(addr); return ReadMem64(addr); }
++
++static INLINE void sh4t_WriteMem8(u32 addr, u8 data) { sh4trace_store(addr, data); WriteMem8(addr, data); }
++static INLINE void sh4t_WriteMem16(u32 addr, u16 data) { sh4trace_store(addr, data); WriteMem16(addr, data); }
++static INLINE void sh4t_WriteMem32(u32 addr, u32 data) { sh4trace_store(addr, data); WriteMem32(addr, data); }
++static INLINE void sh4t_WriteMem64(u32 addr, u64 data) { sh4trace_store(addr, (u32)data); WriteMem64(addr, data); }
++
++// For movca.l, which is recorded as its own op rather than as a store.
++static INLINE void sh4t_WriteMem32_untraced(u32 addr, u32 data) { WriteMem32(addr, data); }
++
++#undef ReadMem8
++#undef ReadMem16
++#undef ReadMem32
++#undef ReadMem64
++#undef WriteMem8
++#undef WriteMem16
++#undef WriteMem32
++#undef WriteMem64
++#define ReadMem8 sh4t_ReadMem8
++#define ReadMem16 sh4t_ReadMem16
++#define ReadMem32 sh4t_ReadMem32
++#define ReadMem64 sh4t_ReadMem64
++#define WriteMem8 sh4t_WriteMem8
++#define WriteMem16 sh4t_WriteMem16
++#define WriteMem32 sh4t_WriteMem32
++#define WriteMem64 sh4t_WriteMem64
+diff --git a/libswirl/hw/sh4/modules/ccn.cpp b/libswirl/hw/sh4/modules/ccn.cpp
+index dd7a50a..ac5973f 100644
+--- a/libswirl/hw/sh4/modules/ccn.cpp
++++ b/libswirl/hw/sh4/modules/ccn.cpp
+@@ -17,6 +17,7 @@
+ #include "mmu.h"
+ #include "../sh4_interpreter.h"
+ #include "modules.h"
++#include "../sh4_trace.h"
+ 
+ //Types
+ 
+@@ -83,6 +84,8 @@ struct Sh4ModCcn_impl : Sh4ModCcn {
+ 
+ 	void CCN_CCR_write(u32 addr, u32 value)
+ 	{
++		sh4trace::ccr(value);
++
+ 		CCN_CCR_type temp;
+ 		temp.reg_data = value;
+ 
+diff --git a/libswirl/hw/sh4/modules/scif.cpp b/libswirl/hw/sh4/modules/scif.cpp
+index fee1050..f1dcc2a 100644
+--- a/libswirl/hw/sh4/modules/scif.cpp
++++ b/libswirl/hw/sh4/modules/scif.cpp
+@@ -11,6 +11,7 @@
+ #include "types.h"
+ #include "hw/sh4/sh4_mmr.h"
+ #include "modules.h"
++#include "../sh4_trace.h"
+ 
+ #include <queue>
+ 
+@@ -43,8 +44,11 @@ int SerialReadData(u8* buffer, size_t nbytes) {
+ }
+ 
+ void SerialWriteData(u8 data) {
++    sh4trace::serial(data);
+     if (settings.debug.SerialConsole) {
+         putc(data, stdout);
++        if (data == '\n')
++            fflush(stdout);  // a capture's log is a file, and devcast may be killed
+     }
+ #if FEAT_HAS_SERIAL_TTY
+     if (pty_master != -1) {
+diff --git a/libswirl/hw/sh4/sh4_interrupts.cpp b/libswirl/hw/sh4/sh4_interrupts.cpp
+index e627127..206bb77 100644
+--- a/libswirl/hw/sh4/sh4_interrupts.cpp
++++ b/libswirl/hw/sh4/sh4_interrupts.cpp
+@@ -20,6 +20,7 @@
+ #include "sh4_core.h"
+ #include "sh4_mmr.h"
+ #include "oslib/oslib.h"
++#include "sh4_trace.h"
+ 
+ /*
+ 
+@@ -164,6 +165,7 @@ bool Do_Interrupt(u32 intEvn)
+ 	sr.RB = 1;
+ 	UpdateSR();
+ 	next_pc = vbr + 0x600;
++	sh4trace::exception(spc, intEvn, next_pc);
+ 
+ 	return true;
+ }
+@@ -184,6 +186,7 @@ bool Do_Exception(u32 epc, u32 expEvn, u32 CallVect)
+ 	UpdateSR();
+ 
+ 	next_pc = vbr + CallVect;
++	sh4trace::exception(epc, expEvn, next_pc);
+ 
+ 	//printf("RaiseException: from %08X , pc errh %08X, %08X vect\n", spc, epc, next_pc);
+ 	return true;
+diff --git a/libswirl/hw/sh4/sh4_mmr.cpp b/libswirl/hw/sh4/sh4_mmr.cpp
+index f460e41..4e8ec08 100644
+--- a/libswirl/hw/sh4/sh4_mmr.cpp
++++ b/libswirl/hw/sh4/sh4_mmr.cpp
+@@ -18,6 +18,7 @@
+ #include "modules/sh4_mod.h"
+ 
+ #include "serialize.h"
++#include "sh4_trace.h"
+ //64bytes of sq // now on context ~
+ 
+ 
+@@ -254,6 +255,7 @@ struct SuperH4Mmr_impl final : SuperH4Mmr
+ 			break;
+ 
+ 		case 0xF0:
++			sh4trace::icarray(addr, (u32)data);
+ 			return;
+ 			break;
+ 
+diff --git a/libswirl/hw/sh4/sh4_trace.cpp b/libswirl/hw/sh4/sh4_trace.cpp
+new file mode 100644
+index 0000000..03fec4f
+--- /dev/null
++++ b/libswirl/hw/sh4/sh4_trace.cpp
+@@ -0,0 +1,489 @@
++/*
++	This file is part of libswirl
++*/
++#include "license/bsd"
++
++/*
++	SH4XTRC1 recorder for Sh4Fit.
++
++	Configuration (environment, read once when emulation first starts):
++		DEVCAST_TRACE=<file>            enables a capture
++		DEVCAST_TRACE_FRAMES=<n>        vblanks to record (default 600)
++		DEVCAST_TRACE_START_FRAME=<n>   start after n vblanks
++		DEVCAST_TRACE_START_PC=<addr>   start when execution branches to addr
++		DEVCAST_TRACE_START_MARKER=<s>  start once s appears on the serial console
++		DEVCAST_TRACE_DATA=0            instruction fetches only
++		DEVCAST_TRACE_MAX_MB=<n>        stop after about n MiB (default 4096)
++		DEVCAST_TRACE_EXIT=1            quit the emulator when the capture is written
++	Recording starts at the first start condition that is met, or at boot when
++	none is set. It ends after the frame count, at the size limit, or when
++	emulation stops (pause, menu, quit), whichever comes first.
++
++	File layout (little endian):
++
++	header, 64 bytes
++		0  "SH4XTRC1"
++		8  u32 version (1)
++		12 u32 header bytes (64)
++		16 u32 flags: 1 data stream, 2 interpreter, 4 started at START_PC,
++		          8 started at START_MARKER, 16 started at START_FRAME
++		20 u32 CCR when recording started
++		24 u32 MMUCR when recording started
++		28 u32 vblank count when recording started
++		32 u64 SH4 cycle count when recording started
++		40 u32 START_PC (0 if unset)
++		44 reserved, zero
++	then blocks, each
++		u32 stream (0 instructions, 1 data accesses)
++		u32 record count
++		records of three u32 words (a, b, t); the record kind is t >> 28
++
++	Instruction stream
++		RANGE  0  [a, b) fetched sequentially, t & 0x0FFFFFFF times in a row
++		FRAME  1  a vblank number, b SH4 cycles since the previous mark (or start)
++		RESET  4  machine reset
++		CCR    5  a value written to CCR (ICI/OCI included), b PC of the store
++		EXCEPT 6  a return address (SPC), b handler address, t & 0xFFF event code
++		CODE   7  a address, b the halfword there; once per 32-byte RAM line, on
++		          its first fetch, so a trace can be matched to its ELF exactly
++		ARRAY  9  a address, b value of a store to the instruction-cache address
++		          array (0xF0xxxxxx), e.g. KOS icache_flush_range()
++		TOTALS 15 at the end; t & 15 selects
++		          0 instructions (a low, b high)  1 data accesses (low, high)
++		          2 a flags (1 size limit, 2 stopped before the frame count), b frames
++		          3 uncached data accesses (low, high)
++	Data stream
++		DATA   8  a first address, b its PC; t bits 27:24 op, 23:20 flags, 19:0 count
++		          op 0 consecutive loads/stores to one 32-byte line; flags 1 loads,
++		               2 stores, 4 the first access was a store
++		          op 1 pref, 2 movca.l, 3 ocbi, 4 ocbp, 5 ocbwb (count 1)
++		          op 6 store to a cache address/data array (0xF0/F1/F4/F5xxxxxx);
++		               b is the stored value, not the PC
++		FRAME, RESET, CCR as above, so each stream stands alone.
++
++	A RANGE ends wherever fetching stops being sequential: after a taken branch's
++	delay slot, a taken bt/bf, or before an EXCEPT, FRAME, CCR, ARRAY or RESET
++	record, which split the run in progress. Only cacheable data accesses (P0, P1,
++	P3 outside area 7) become DATA records; the rest are counted as uncached.
++*/
++
++#include "sh4_trace.h"
++
++#include <errno.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <string>
++#include <vector>
++
++#include "hw/sh4/sh4_mmr.h"
++#include "hw/sh4/sh4_mem.h"
++#include "hw/sh4/sh4_sched.h"
++#include "sh4_core.h"
++
++extern u32 vblank_count_monotonic;	// hw/pvr/spg.cpp
++
++namespace sh4trace
++{
++	enum : u32 { NONE = 1 };	// odd, so never a fetch address or a line
++
++	u32 fetching = 0;
++	u32 next_fetch = NONE;
++	u32 data_on = 0;
++	u32 data_line = NONE;
++	u32 data_count = 0;
++	u32 data_flags = 0;
++
++	namespace
++	{
++		enum : u32 { RANGE = 0, FRAME = 1, RESET = 4, CCR = 5, EXCEPT = 6, CODE = 7, DATA = 8, ARRAY = 9, TOTALS = 15 };
++		enum : u32 { HAS_DATA = 1, INTERPRETER = 2, AT_PC = 4, AT_MARKER = 8, AT_FRAME = 16 };
++		enum : u32 { LIMIT = 1, STOPPED = 2 };
++		enum : u32 { HEADER_BYTES = 64, BLOCK_RECORDS = 1 << 16, REPEAT_MAX = 0x0FFFFFFF };
++		enum State { UNCONFIGURED, OFF, WAITING, RECORDING, DONE };
++
++		struct Config
++		{
++			std::string path, marker;
++			u32 frames = 600, start_frame = 0, start_pc = 0;
++			bool data = true, exit_after = false;
++			u64 max_bytes = 4096ull << 20;
++		};
++
++		State state = UNCONFIGURED;
++		Config cfg;
++		FILE* file;
++		u64 bytes;
++		bool over_limit;
++
++		struct Stream
++		{
++			u32 id;
++			std::vector<u32> words;
++
++			void flush()
++			{
++				if (words.empty())
++					return;
++				u32 head[2] = { id, (u32)(words.size() / 3) };
++				fwrite(head, sizeof(head), 1, file);
++				fwrite(words.data(), sizeof(u32), words.size(), file);
++				bytes += sizeof(head) + words.size() * sizeof(u32);
++				over_limit = over_limit || bytes >= cfg.max_bytes;
++				words.clear();
++			}
++
++			void put(u32 a, u32 b, u32 t)
++			{
++				words.push_back(a);
++				words.push_back(b);
++				words.push_back(t);
++				if (words.size() >= BLOCK_RECORDS * 3)
++					flush();
++			}
++		};
++
++		Stream fetches = { 0 }, accesses = { 1 };
++
++		u32 run_start = NONE;				// current sequential run is [run_start, next_fetch)
++		u32 pend_start, pend_end, pend_count;	// last run, held back to fold repeats
++		u32 data_first, data_pc;
++		u32 frames_recorded, vblanks_waited;
++		u64 instructions, data_total, uncached, last_frame_cycle;
++		std::vector<u64> code_seen;
++		std::string serial_line;
++
++		u32 env_u32(const char* name, u32 fallback)
++		{
++			const char* value = getenv(name);
++			return value && *value ? (u32)strtoul(value, nullptr, 0) : fallback;
++		}
++
++		void configure()
++		{
++			state = OFF;
++			const char* path = getenv("DEVCAST_TRACE");
++			if (!path || !*path)
++				return;
++			cfg.path = path;
++			cfg.frames = env_u32("DEVCAST_TRACE_FRAMES", cfg.frames);
++			cfg.start_frame = env_u32("DEVCAST_TRACE_START_FRAME", 0);
++			cfg.start_pc = env_u32("DEVCAST_TRACE_START_PC", 0);
++			cfg.data = env_u32("DEVCAST_TRACE_DATA", 1) != 0;
++			cfg.exit_after = env_u32("DEVCAST_TRACE_EXIT", 0) != 0;
++			cfg.max_bytes = (u64)env_u32("DEVCAST_TRACE_MAX_MB", 4096) << 20;
++			if (const char* marker = getenv("DEVCAST_TRACE_START_MARKER"))
++				cfg.marker = marker;
++			if (!cfg.frames)
++				cfg.frames = 1;
++		}
++
++		bool cacheable(u32 addr)
++		{
++			u32 area = addr >> 29;
++			if (area == 5 || area == 7)		// P2 is uncached, P4 is control space
++				return false;
++			return (addr & 0x1FFFFFFF) < 0x1C000000;	// area 7 is never cached
++		}
++
++		bool cache_array(u32 addr)
++		{
++			u32 top = addr >> 24;
++			return top == 0xF0 || top == 0xF1 || top == 0xF4 || top == 0xF5;
++		}
++
++		u32 current_pc()
++		{
++			return next_pc - 2;
++		}
++
++		void flush_range()
++		{
++			if (pend_count)
++			{
++				fetches.put(pend_start, pend_end, RANGE << 28 | pend_count);
++				pend_count = 0;
++			}
++		}
++
++		// First fetch from each 32-byte RAM line records the halfword found there.
++		void note_code(u32 start, u32 end)
++		{
++			if (((start >> 26) & 7) != 3 || (start >> 29) == 7)
++				return;
++			for (u32 addr = start; addr < end; addr = (addr | 31) + 1)
++			{
++				u32 line = (addr & RAM_MASK) >> 5;
++				u64 bit = 1ull << (line & 63);
++				if (code_seen[line >> 6] & bit)
++					continue;
++				code_seen[line >> 6] |= bit;
++				if (u8* p = GetMemPtr(addr, 2))
++					fetches.put(addr, *(u16*)p, CODE << 28);
++			}
++		}
++
++		void add_range(u32 start, u32 end)
++		{
++			instructions += (end - start) >> 1;
++			if (pend_count && start == pend_start && end == pend_end && pend_count < REPEAT_MAX)
++			{
++				pend_count++;
++				return;
++			}
++			flush_range();
++			note_code(start, end);
++			pend_start = start;
++			pend_end = end;
++			pend_count = 1;
++		}
++
++		void close_run()
++		{
++			if (run_start != NONE && next_fetch != run_start)
++				add_range(run_start, next_fetch);
++		}
++
++		// End the run in progress so the next record lands in order; fetching
++		// continues sequentially from next_fetch.
++		void split()
++		{
++			close_run();
++			run_start = next_fetch;
++			flush_range();
++		}
++
++		void close_data()
++		{
++			if (data_line == NONE)
++				return;
++			accesses.put(data_first, data_pc, DATA << 28 | OP_ACCESS << 24 | (data_flags & 15) << 20 | data_count);
++			data_total += data_count;
++			data_line = NONE;
++		}
++
++		// A record both streams carry.
++		void mark(u32 a, u32 b, u32 t)
++		{
++			split();
++			fetches.put(a, b, t);
++			if (data_on)
++			{
++				close_data();
++				accesses.put(a, b, t);
++			}
++		}
++
++		void begin(u32 trigger)
++		{
++			file = fopen(cfg.path.c_str(), "wb");
++			if (!file)
++			{
++				printf("sh4trace: cannot write %s: %s\n", cfg.path.c_str(), strerror(errno));
++				state = DONE;
++				fetching = data_on = 0;
++				return;
++			}
++			auto sh4mmr = sh4_cpu->sh4mmr.get();
++			u64 now = sh4_sched_now64();
++			u32 header[HEADER_BYTES / 4] = {};
++			memcpy(header, "SH4XTRC1", 8);
++			header[2] = 1;
++			header[3] = HEADER_BYTES;
++			header[4] = (cfg.data ? HAS_DATA : 0) | INTERPRETER | trigger;
++			header[5] = CCN_CCR.reg_data;
++			header[6] = CCN_MMUCR.reg_data;
++			header[7] = vblank_count_monotonic;
++			header[8] = (u32)now;
++			header[9] = (u32)(now >> 32);
++			header[10] = cfg.start_pc;
++			fwrite(header, sizeof(header), 1, file);
++			bytes = sizeof(header);
++			over_limit = false;
++			code_seen.assign(RAM_SIZE / 32 / 64, 0);
++			instructions = data_total = uncached = 0;
++			frames_recorded = pend_count = 0;
++			last_frame_cycle = now;
++			run_start = next_fetch = data_line = NONE;
++			state = RECORDING;
++			fetching = 1;
++			data_on = cfg.data;
++			printf("sh4trace: recording %u frames%s to %s\n", cfg.frames, cfg.data ? " with data accesses" : "",
++				cfg.path.c_str());
++		}
++
++		void finish(u32 flags)
++		{
++			split();
++			close_data();
++			fetches.put((u32)instructions, (u32)(instructions >> 32), TOTALS << 28 | 0);
++			fetches.put((u32)data_total, (u32)(data_total >> 32), TOTALS << 28 | 1);
++			fetches.put(flags | (over_limit ? LIMIT : 0), frames_recorded, TOTALS << 28 | 2);
++			fetches.put((u32)uncached, (u32)(uncached >> 32), TOTALS << 28 | 3);
++			accesses.flush();
++			fetches.flush();
++			fclose(file);
++			file = nullptr;
++			state = DONE;
++			fetching = data_on = 0;
++			run_start = next_fetch = data_line = NONE;
++			printf("sh4trace: wrote %s: %u frames, %llu instructions, %llu data accesses, %llu bytes%s\n",
++				cfg.path.c_str(), frames_recorded, (unsigned long long)instructions,
++				(unsigned long long)data_total, (unsigned long long)bytes,
++				over_limit ? " (size limit reached)" : (flags & STOPPED ? " (emulation stopped early)" : ""));
++			if (cfg.exit_after)
++			{
++				fflush(stdout);
++				_exit(0);
++			}
++		}
++	}
++
++	bool requested()
++	{
++		if (state == UNCONFIGURED)
++			configure();
++		return !cfg.path.empty();
++	}
++
++	void arm()
++	{
++		if (!requested() || state != OFF)
++			return;
++		state = WAITING;
++		if (!cfg.start_frame && !cfg.start_pc && cfg.marker.empty())
++		{
++			begin(0);
++			return;
++		}
++		fetching = cfg.start_pc != 0;	// watch branch targets for the start address
++		std::string when;
++		char pc[16];
++		if (cfg.start_frame)
++			when += " vblank " + std::to_string(cfg.start_frame);
++		if (cfg.start_pc)
++		{
++			snprintf(pc, sizeof(pc), "0x%08x", cfg.start_pc);
++			when += std::string(" pc ") + pc;
++		}
++		if (!cfg.marker.empty())
++			when += " marker \"" + cfg.marker + "\"";
++		printf("sh4trace: %s waits for%s\n", cfg.path.c_str(), when.c_str());
++	}
++
++	void stopped()
++	{
++		if (state == RECORDING)
++			finish(STOPPED);
++	}
++
++	void reset()
++	{
++		if (state == RECORDING)
++			mark(0, 0, RESET << 28);
++	}
++
++	void fetch_break(u32 addr)
++	{
++		if (state == RECORDING)
++		{
++			close_run();
++			run_start = addr;
++		}
++		else if (state == WAITING && addr == cfg.start_pc)
++		{
++			begin(AT_PC);
++			run_start = addr;
++		}
++	}
++
++	void access(u32 addr, u32 value, u32 kind)
++	{
++		if (!cacheable(addr))
++		{
++			// Uncached traffic (store queues, P2, registers) leaves the cache
++			// alone, so the run on the current line stays open across it.
++			uncached++;
++			if (kind == STORE && cache_array(addr))
++			{
++				close_data();
++				accesses.put(addr, value, DATA << 28 | OP_ARRAY << 24 | STORE << 20 | 1);
++			}
++			return;
++		}
++		close_data();
++		data_line = addr & ~31u;
++		data_first = addr;
++		data_pc = current_pc();
++		data_flags = kind | (kind == STORE ? 4 : 0);
++		data_count = 1;
++	}
++
++	void cacheop(u32 addr, u32 op)
++	{
++		if (!cacheable(addr))	// e.g. pref on the store queues
++			return;
++		close_data();
++		data_total++;
++		accesses.put(addr, current_pc(), DATA << 28 | op << 24 | 1);
++	}
++
++	void frame(u32 vblank)
++	{
++		if (state == WAITING)
++		{
++			if (cfg.start_frame && ++vblanks_waited >= cfg.start_frame)
++				begin(AT_FRAME);
++			return;
++		}
++		if (state != RECORDING)
++			return;
++		u64 now = sh4_sched_now64();
++		u64 cycles = now - last_frame_cycle;
++		last_frame_cycle = now;
++		mark(vblank, cycles > 0xFFFFFFFF ? 0xFFFFFFFF : (u32)cycles, FRAME << 28);
++		if (++frames_recorded >= cfg.frames || over_limit)
++			finish(0);
++	}
++
++	void ccr(u32 value)
++	{
++		if (state == RECORDING)
++			mark(value, current_pc(), CCR << 28);
++	}
++
++	void icarray(u32 addr, u32 value)
++	{
++		if (state != RECORDING)
++			return;
++		split();
++		fetches.put(addr, value, ARRAY << 28);
++	}
++
++	void exception(u32 epc, u32 event, u32 target)
++	{
++		if (state != RECORDING)
++			return;
++		split();
++		fetches.put(epc, target, EXCEPT << 28 | (event & 0xFFF));
++	}
++
++	void serial(u8 c)
++	{
++		if (state != WAITING || cfg.marker.empty())
++			return;
++		if (c == '\n' || c == '\r')
++		{
++			serial_line.clear();
++			return;
++		}
++		if (serial_line.size() < 4096)
++			serial_line += (char)c;
++		if (serial_line.find(cfg.marker) != std::string::npos)
++		{
++			serial_line.clear();
++			begin(AT_MARKER);
++		}
++	}
++}
+diff --git a/libswirl/hw/sh4/sh4_trace.h b/libswirl/hw/sh4/sh4_trace.h
+new file mode 100644
+index 0000000..8ec625d
+--- /dev/null
++++ b/libswirl/hw/sh4/sh4_trace.h
+@@ -0,0 +1,109 @@
++/*
++	This file is part of libswirl
++*/
++#include "license/bsd"
++
++/*
++	SH4XTRC1 execution traces for Sh4Fit (cache-aware code and data layout).
++
++	Records every instruction fetch as runs of sequential addresses and,
++	optionally, every cacheable data access as runs on one 32-byte line. The
++	caches themselves are not emulated: Sh4Fit replays the trace through its own
++	IC/OC model, which is what lets one capture score any code layout.
++
++	Only the interpreter calls these hooks; a capture forces it on. Capture is
++	configured with DEVCAST_TRACE* environment variables (see sh4_trace.cpp and
++	docs/sh4trace.md).
++*/
++#pragma once
++#include "types.h"
++
++namespace sh4trace
++{
++	// Hot-path state, read by the inline hooks below. `fetching` is non-zero
++	// while recording, or while waiting for a start PC; `data_on` while
++	// recording data accesses.
++	extern u32 fetching;
++	extern u32 next_fetch;
++	extern u32 data_on;
++	extern u32 data_line;
++	extern u32 data_count;
++	extern u32 data_flags;
++
++	enum : u32
++	{
++		DATA_COUNT_MAX = 0xFFFFF,
++		// data access kinds, also the low DATA record flag bits
++		LOAD = 1,
++		STORE = 2,
++		// DATA record ops
++		OP_ACCESS = 0,
++		OP_PREF = 1,
++		OP_MOVCA = 2,
++		OP_OCBI = 3,
++		OP_OCBP = 4,
++		OP_OCBWB = 5,
++		OP_ARRAY = 6,
++	};
++
++	bool requested();	// a capture is configured; the interpreter must run
++	void arm();			// emulation (re)started; begins or arms the capture once
++	void stopped();		// emulation stopped; finishes a running capture
++	void reset();		// machine reset inside a capture
++
++	void fetch_break(u32 addr);
++	void access(u32 addr, u32 value, u32 kind);
++	void cacheop(u32 addr, u32 op);
++	void frame(u32 vblank);
++	void ccr(u32 value);
++	void icarray(u32 addr, u32 value);	// store to the IC address array
++	void exception(u32 epc, u32 event, u32 target);
++	void serial(u8 c);
++}
++
++// Instruction fetch at `addr`, called before the opcode is read.
++static INLINE void sh4trace_fetch(u32 addr)
++{
++	if (unlikely(sh4trace::fetching))
++	{
++		if (addr != sh4trace::next_fetch)
++			sh4trace::fetch_break(addr);
++		sh4trace::next_fetch = addr + 2;
++	}
++}
++
++// Data accesses. Consecutive accesses to one line merge into a single record.
++static INLINE void sh4trace_load(u32 addr)
++{
++	if (unlikely(sh4trace::data_on))
++	{
++		if ((addr & ~31u) == sh4trace::data_line && sh4trace::data_count < sh4trace::DATA_COUNT_MAX)
++		{
++			sh4trace::data_count++;
++			sh4trace::data_flags |= sh4trace::LOAD;
++		}
++		else
++			sh4trace::access(addr, 0, sh4trace::LOAD);
++	}
++}
++
++static INLINE void sh4trace_store(u32 addr, u32 value)
++{
++	if (unlikely(sh4trace::data_on))
++	{
++		if ((addr & ~31u) == sh4trace::data_line && sh4trace::data_count < sh4trace::DATA_COUNT_MAX)
++		{
++			sh4trace::data_count++;
++			sh4trace::data_flags |= sh4trace::STORE;
++		}
++		else
++			sh4trace::access(addr, value, sh4trace::STORE);
++	}
++}
++
++// pref / movca.l / ocbi / ocbp / ocbwb on `addr`
++static INLINE void sh4trace_cacheop(u32 addr, u32 op)
++{
++	if (unlikely(sh4trace::data_on))
++		sh4trace::cacheop(addr, op);
++}
+diff --git a/libswirl/libswirl.cpp b/libswirl/libswirl.cpp
+index 5c2ea79..87857ee 100644
+--- a/libswirl/libswirl.cpp
++++ b/libswirl/libswirl.cpp
+@@ -23,6 +23,7 @@
+ #include "hw/naomi/naomi_cart.h"
+ #include "reios/reios.h"
+ #include "hw/sh4/sh4_sched.h"
++#include "hw/sh4/sh4_trace.h"
+ #include "hw/pvr/Renderer_if.h"
+ #include "hw/pvr/spg.h"
+ #include "hw/aica/dsp.h"
+@@ -716,14 +717,15 @@ struct Dreamcast_impl : VirtualDreamcast {
+         luabindings_onstart();
+ #endif
+ 
+-        if (settings.dynarec.Enable && sh4_cpu->setBackend(SH4BE_DYNAREC))
++        // SH4XTRC1 captures hook the interpreter only
++        if (settings.dynarec.Enable && !sh4trace::requested() && sh4_cpu->setBackend(SH4BE_DYNAREC))
+         {
+             printf("Using MCPU Recompiler\n");
+         }
+         else
+         {
+             sh4_cpu->setBackend(SH4BE_INTERPRETER);
+-            printf("Using MCPU Interpreter\n");
++            printf("Using MCPU Interpreter%s\n", sh4trace::requested() ? " (sh4trace capture)" : "");
+         }
+ 
+         auto scpu = sh4_cpu->GetA0H<SoundCPU>(A0H_SCPU);
+@@ -751,6 +753,7 @@ struct Dreamcast_impl : VirtualDreamcast {
+         }
+ 
+         sh4_cpu->Start();
++        sh4trace::arm();
+ 
+         emu_started.Set();
+ 
+@@ -764,12 +767,15 @@ struct Dreamcast_impl : VirtualDreamcast {
+             {
+                 virtualDreamcast->Reset();
+                 sh4_cpu->Start();
++                sh4trace::reset();
+ #ifdef SCRIPTING
+                 luabindings_onreset();
+ #endif
+             }
+         } while (reset_requested);
+ 
++            sh4trace::stopped();
++
+ #ifdef SCRIPTING
+             luabindings_onstop();
+ #endif
